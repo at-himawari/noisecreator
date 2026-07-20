@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101c24">
+    <title>Rain Studio — 雨音ジェネレーター</title>
+    <meta name="description" content="長さと雨量を選んで自然な雨音を生成・再生できます。">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="weather" aria-hidden="true"><span></span><span></span><span></span></div>
+    <main>
+      <header>
+        <p class="eyebrow">PROCEDURAL AMBIENCE</p>
+        <h1>Rain <em>Studio</em></h1>
+        <p class="lead">集中したい時間に、眠りにつく前に。<br>あなただけの雨を、その場でつくります。</p>
+      </header>
+
+      <section class="studio" aria-labelledby="settings-title">
+        <div class="section-heading">
+          <div>
+            <p class="step">01 / SETTINGS</p>
+            <h2 id="settings-title">雨の設定</h2>
+          </div>
+          <span class="status" id="status" role="status">準備完了</span>
+        </div>
+
+        <div class="controls">
+          <label class="control" for="duration">
+            <span class="label-row"><span>長さ</span><output id="duration-value">30秒</output></span>
+            <input id="duration" type="range" min="5" max="600" step="5" value="30">
+            <span class="range-labels"><span>5秒</span><span>10分</span></span>
+          </label>
+
+          <label class="control" for="intensity">
+            <span class="label-row"><span>雨量</span><output id="intensity-value">穏やか</output></span>
+            <input id="intensity" type="range" min="0" max="1" step="0.01" value="0.65">
+            <span class="range-labels"><span>小雨</span><span>強い雨</span></span>
+          </label>
+        </div>
+
+        <label class="mode-toggle" for="continuous">
+          <span>
+            <strong>連続モード</strong>
+            <small>停止するまで雨音を再生し続けます</small>
+          </span>
+          <input id="continuous" type="checkbox" role="switch">
+        </label>
+
+        <button class="generate" id="generate" type="button">
+          <span class="button-text">雨音を生成する</span>
+          <span class="button-time" id="button-time">00:30</span>
+        </button>
+
+        <button class="blackout-trigger" id="blackout-trigger" type="button">
+          <span aria-hidden="true">●</span>
+          画面を消灯する
+        </button>
+      </section>
+
+      <section class="player-panel" id="player-panel" aria-labelledby="player-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="step">02 / LISTEN</p>
+            <h2 id="player-title">生成した雨音</h2>
+          </div>
+          <a id="download" class="download" download="rain.mp3">MP3を保存</a>
+        </div>
+        <audio id="player" controls preload="metadata"></audio>
+      </section>
+    </main>
+    <footer>&copy; 2026Himawari Project Public-domain rain by ezwa · MP3 by <a href="https://lame.sourceforge.io/" target="_blank" rel="noreferrer">LAME</a></footer>
+    <button class="blackout-screen" id="blackout-screen" type="button" aria-label="画面の消灯を解除する" hidden></button>
+    <script src="rain-source-data.js"></script>
+    <script src="lame.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

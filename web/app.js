@@ -21,6 +21,12 @@ let decodedRain = null;
 let continuousSession = null;
 let blackoutReturnFocus = null;
 
+function trackEvent(eventName, parameters = {}) {
+  if (typeof globalThis.gtag === "function") {
+    globalThis.gtag("event", eventName, parameters);
+  }
+}
+
 function enterBlackout() {
   blackoutReturnFocus = document.activeElement;
   blackoutScreen.hidden = false;
@@ -37,6 +43,18 @@ function exitBlackout() {
 
 blackoutTrigger.addEventListener("click", enterBlackout);
 blackoutScreen.addEventListener("click", exitBlackout);
+player.addEventListener("play", () => {
+  trackEvent("rain_audio_play", {
+    duration_seconds: Number(duration.value),
+    intensity: Number(intensity.value),
+  });
+});
+download.addEventListener("click", () => {
+  trackEvent("rain_audio_download", {
+    duration_seconds: Number(duration.value),
+    intensity: Number(intensity.value),
+  });
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !blackoutScreen.hidden) exitBlackout();
 });
@@ -254,6 +272,7 @@ generateButton.addEventListener("click", async () => {
     generateButton.disabled = true;
     status.textContent = "停止中…";
     await stopContinuousPlayback();
+    trackEvent("continuous_playback_stop");
     generateButton.disabled = false;
     continuous.disabled = false;
     intensity.disabled = false;
@@ -271,6 +290,9 @@ generateButton.addEventListener("click", async () => {
   try {
     if (continuous.checked) {
       await startContinuousPlayback(Number(intensity.value));
+      trackEvent("continuous_playback_start", {
+        intensity: Number(intensity.value),
+      });
       player.pause();
       status.textContent = "連続再生中";
       document.querySelector(".button-text").textContent = "停止する";
@@ -290,6 +312,10 @@ generateButton.addEventListener("click", async () => {
     download.href = currentAudioUrl;
     download.download = `rain-${seconds}s.mp3`;
     playerPanel.hidden = false;
+    trackEvent("rain_audio_generated", {
+      duration_seconds: seconds,
+      intensity: Number(intensity.value),
+    });
     status.textContent = "生成完了";
     playerPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
     await player.play().catch(() => {});

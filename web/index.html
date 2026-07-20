@@ -6,6 +6,23 @@
     <meta name="theme-color" content="#101c24">
     <title>Rain Studio — 雨音ジェネレーター</title>
     <meta name="description" content="長さと雨量を選んで自然な雨音を生成・再生できます。">
+    <meta property="og:type" content="website">
+    <meta property="og:locale" content="ja_JP">
+    <meta property="og:site_name" content="Rain Studio">
+    <meta property="og:title" content="Rain Studio — 雨音ジェネレーター">
+    <meta property="og:description" content="長さと雨量を選んで、集中や睡眠に使える自然な雨音をブラウザで生成できます。">
+    <meta property="og:image" content="/og-image.png">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="雨粒と水面を背景にしたRain Studioのビジュアル">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Rain Studio — 雨音ジェネレーター">
+    <meta name="twitter:description" content="長さと雨量を選んで、自然な雨音をその場で生成できます。">
+    <meta name="twitter:image" content="/og-image.png">
+    <link rel="icon" href="favicon.svg?v=1" type="image/svg+xml">
+    <link rel="alternate icon" href="favicon-32.png?v=1" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1" sizes="180x180">
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-4XTWV1ZNJX"></script>
     <script>
@@ -78,7 +95,9 @@
         <audio id="player" controls preload="metadata"></audio>
       </section>
     </main>
-    <footer>&copy; 2026Himawari Project Public-domain rain by ezwa · MP3 by <a href="https://lame.sourceforge.io/" target="_blank" rel="noreferrer">LAME</a></footer>
+    <footer><p>&copy; 2026Himawari Project </p>
+      <p>Public-domain rain by ezwa · MP3 by <a href="https://lame.sourceforge.io/" target="_blank" rel="noreferrer">LAME</a></p>
+    </footer>
     <button class="blackout-screen" id="blackout-screen" type="button" aria-label="画面の消灯を解除する" hidden></button>
     <script src="rain-source-data.js"></script>
     <script src="lame.min.js"></script>

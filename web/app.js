@@ -19,7 +19,6 @@ const blackoutTrigger = document.querySelector("#blackout-trigger");
 const blackoutScreen = document.querySelector("#blackout-screen");
 
 let currentAudioUrl = null;
-let decodedRain = null;
 let continuousSession = null;
 let blackoutReturnFocus = null;
 let regenerationTimer = null;
@@ -96,51 +95,6 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !blackoutScreen.hidden) exitBlackout();
 });
 
-function decodeBase64Audio(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes.buffer;
-}
-
-async function loadRainRecording() {
-  if (decodedRain) return decodedRain;
-  if (!globalThis.RAIN_SOURCE_BASE64) {
-    throw new Error("雨音素材を読み込めませんでした");
-  }
-  const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
-  if (!AudioContextClass) throw new Error("このブラウザは音声処理に対応していません");
-  const audioContext = new AudioContextClass({ sampleRate: SAMPLE_RATE });
-  try {
-    decodedRain = await audioContext.decodeAudioData(decodeBase64Audio(globalThis.RAIN_SOURCE_BASE64));
-    return decodedRain;
-  } finally {
-    await audioContext.close();
-  }
-}
-
-function sampleAt(data, position) {
-  const lower = Math.floor(position);
-  const upper = Math.min(lower + 1, data.length - 1);
-  const mix = position - lower;
-  return data[lower] * (1 - mix) + data[upper] * mix;
-}
-
-function loopedSample(data, sourcePosition, start, end, crossfadeLength) {
-  const loopLength = end - start;
-  const relative = ((sourcePosition - start) % loopLength + loopLength) % loopLength;
-  const position = start + relative;
-  if (relative < loopLength - crossfadeLength) return sampleAt(data, position);
-
-  const blend = (relative - (loopLength - crossfadeLength)) / crossfadeLength;
-  const beginningPosition = start + relative - (loopLength - crossfadeLength);
-  const endingGain = Math.cos(blend * Math.PI * 0.5);
-  const beginningGain = Math.sin(blend * Math.PI * 0.5);
-  return sampleAt(data, position) * endingGain + sampleAt(data, beginningPosition) * beginningGain;
-}
-
 function toPcm16(sample) {
   return Math.round(Math.max(-1, Math.min(1, sample)) * 32767);
 }
@@ -157,23 +111,6 @@ function createRandom(seed = Math.floor(Math.random() * 0xffffffff)) {
 
 function exponentialInterval(random, ratePerSecond) {
   return -Math.log(Math.max(1e-9, 1 - random())) * SAMPLE_RATE / ratePerSecond;
-}
-
-function smoothstep(edge0, edge1, value) {
-  const progress = Math.max(0, Math.min(1, (value - edge0) / Math.max(1e-9, edge1 - edge0)));
-  return progress * progress * (3 - 2 * progress);
-}
-
-function rainLayerLevels(amount, layerCount = 4) {
-  const value = Math.max(0, Math.min(1, Number(amount)));
-  const rawLevels = [
-    1,
-    smoothstep(0.28, 0.55, value) * 0.65,
-    smoothstep(0.52, 0.78, value) * 0.45,
-    smoothstep(0.74, 1, value) * 0.32,
-  ].slice(0, layerCount);
-  const energy = Math.sqrt(rawLevels.reduce((sum, level) => sum + level * level, 0));
-  return rawLevels.map((level) => level / Math.max(energy, 1e-9));
 }
 
 function rainBackgroundGain(amount) {
@@ -280,27 +217,49 @@ function renderDrops(activeDrops, random) {
   return [left, right];
 }
 
+function createRainBedState() {
+  return {
+    commonFast: 0,
+    commonSlow: 0,
+    leftFast: 0,
+    leftSlow: 0,
+    rightFast: 0,
+    rightSlow: 0,
+    low: 0,
+  };
+}
+
+function renderRainBed(state, random) {
+  const common = random() * 2 - 1;
+  const independentLeft = random() * 2 - 1;
+  const independentRight = random() * 2 - 1;
+  state.commonFast += (common - state.commonFast) * 0.24;
+  state.commonSlow += (common - state.commonSlow) * 0.018;
+  state.leftFast += (independentLeft - state.leftFast) * 0.2;
+  state.leftSlow += (independentLeft - state.leftSlow) * 0.014;
+  state.rightFast += (independentRight - state.rightFast) * 0.2;
+  state.rightSlow += (independentRight - state.rightSlow) * 0.014;
+  state.low += (common - state.low) * 0.004;
+  const commonBand = state.commonFast - state.commonSlow;
+  return [
+    commonBand * 0.72 + (state.leftFast - state.leftSlow) * 0.28 + state.low * 0.22,
+    commonBand * 0.72 + (state.rightFast - state.rightSlow) * 0.28 + state.low * 0.22,
+  ];
+}
+
 async function generateMp3(seconds, amount, onProgress) {
   if (!globalThis.lamejs?.Mp3Encoder) {
     throw new Error("MP3エンコーダーを読み込めませんでした");
   }
 
-  onProgress(1, "実録音源を準備中");
-  const recording = await loadRainRecording();
-  const source = recording.getChannelData(0);
-  const sourceRatio = recording.sampleRate / SAMPLE_RATE;
-  const loopStart = Math.round(recording.sampleRate * 1.2);
-  const loopEnd = source.length - Math.round(recording.sampleRate * 1.2);
-  const crossfadeLength = Math.round(recording.sampleRate * 2.8);
-  const randomStart = loopStart + Math.random() * (loopEnd - loopStart - crossfadeLength);
-  const layers = [0, 9.73, 19.61, 29.47];
-  const layerLevels = rainLayerLevels(amount, layers.length);
+  onProgress(1, "雨音を準備中");
   const baseBackgroundGain = rainBackgroundGain(amount);
   const encoder = new lamejs.Mp3Encoder(2, SAMPLE_RATE, MP3_BITRATE);
   const totalFrames = Math.round(seconds * SAMPLE_RATE);
   const totalBlocks = Math.ceil(totalFrames / MP3_BLOCK_SIZE);
   const mp3Chunks = [];
   const random = createRandom();
+  const rainBedState = createRainBedState();
   const intensityAt = createIntensityCurve(totalFrames, amount, random);
   const activeDrops = [];
   const dropRates = createDropRates(amount);
@@ -316,20 +275,8 @@ async function generateMp3(seconds, amount, onProgress) {
 
     for (let local = 0; local < frameCount; local += 1) {
       const frame = startFrame + local;
-      const basePosition = randomStart + frame * sourceRatio;
       const currentIntensity = intensityAt(frame);
-      let left = 0;
-      let right = 0;
-
-      for (let layer = 0; layer < layers.length; layer += 1) {
-        const offset = layers[layer] * recording.sampleRate;
-        left += loopedSample(source, basePosition + offset, loopStart, loopEnd, crossfadeLength)
-          * layerLevels[layer];
-        // The base layer stays centered; added layers widen heavier rainfall.
-        const stereoOffset = layer === 0 ? 0 : (0.41 + layer * 0.27) * recording.sampleRate;
-        right += loopedSample(source, basePosition + offset + stereoOffset, loopStart, loopEnd, crossfadeLength)
-          * layerLevels[layer];
-      }
+      const [bedLeft, bedRight] = renderRainBed(rainBedState, random);
 
       while (frame >= nextSmallDrop) {
         activeDrops.push(createDrop(random, "small", 0.8 + amount * 0.35));
@@ -346,8 +293,8 @@ async function generateMp3(seconds, amount, onProgress) {
       const [dropLeft, dropRight] = renderDrops(activeDrops, random);
       const backgroundGain = baseBackgroundGain * currentIntensity
         * (0.98 + Math.sin(frame / SAMPLE_RATE * 0.071) * 0.012);
-      leftPcm[local] = toPcm16(left * backgroundGain + dropLeft);
-      rightPcm[local] = toPcm16(right * backgroundGain + dropRight);
+      leftPcm[local] = toPcm16(bedLeft * backgroundGain + dropLeft);
+      rightPcm[local] = toPcm16(bedRight * backgroundGain + dropRight);
     }
 
     const encoded = encoder.encodeBuffer(leftPcm, rightPcm);
@@ -365,97 +312,87 @@ async function generateMp3(seconds, amount, onProgress) {
   return new Blob(mp3Chunks, { type: "audio/mpeg" });
 }
 
-function createSeamlessLoop(audioContext, recording) {
-  const source = recording.getChannelData(0);
-  const trim = Math.round(recording.sampleRate * 1.2);
-  const crossfade = Math.round(recording.sampleRate * 2.8);
-  const segmentLength = source.length - trim * 2;
-  const loopLength = segmentLength - crossfade;
-  const bodyLength = loopLength - crossfade;
-  const loop = audioContext.createBuffer(1, loopLength, recording.sampleRate);
-  const output = loop.getChannelData(0);
-
-  for (let index = 0; index < bodyLength; index += 1) {
-    output[index] = source[trim + crossfade + index];
+function createNoiseBuffer(audioContext, seconds = 7) {
+  const length = Math.floor(audioContext.sampleRate * seconds);
+  const buffer = audioContext.createBuffer(2, length, audioContext.sampleRate);
+  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+    const data = buffer.getChannelData(channel);
+    let previous = 0;
+    for (let index = 0; index < length; index += 1) {
+      const white = Math.random() * 2 - 1;
+      previous = previous * 0.75 + white * 0.25;
+      data[index] = previous;
+    }
   }
-  for (let index = 0; index < crossfade; index += 1) {
-    const blend = index / crossfade;
-    const tail = source[trim + crossfade + bodyLength + index];
-    const head = source[trim + index];
-    output[bodyLength + index] = tail * Math.cos(blend * Math.PI * 0.5)
-      + head * Math.sin(blend * Math.PI * 0.5);
-  }
-  return loop;
+  return buffer;
 }
 
 async function startContinuousPlayback(amount) {
   const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
   const audioContext = new AudioContextClass({ sampleRate: SAMPLE_RATE });
   await audioContext.resume();
-  const recording = await loadRainRecording();
-  const seamlessLoop = createSeamlessLoop(audioContext, recording);
-  const intensityGain = audioContext.createGain();
+  const masterGain = audioContext.createGain();
   const variationGain = audioContext.createGain();
   const now = audioContext.currentTime;
-  intensityGain.gain.setValueAtTime(rainBackgroundGain(amount), now);
-  variationGain.gain.setValueAtTime(0, now);
-  intensityGain.connect(variationGain);
-  variationGain.connect(audioContext.destination);
+  masterGain.gain.setValueAtTime(0, now);
+  masterGain.gain.linearRampToValueAtTime(0.9, now + 1.2);
+  variationGain.gain.setValueAtTime(1, now);
+  variationGain.connect(masterGain).connect(audioContext.destination);
 
-  const sources = [];
-  const layerGains = [];
-  const initialLayerLevels = rainLayerLevels(amount);
-  for (let layer = 0; layer < initialLayerLevels.length; layer += 1) {
-    const source = audioContext.createBufferSource();
-    const layerGain = audioContext.createGain();
-    source.buffer = seamlessLoop;
-    source.loop = true;
-    source.loopStart = 0;
-    source.loopEnd = seamlessLoop.duration;
-    layerGain.gain.value = initialLayerLevels[layer];
-    source.connect(layerGain);
+  const noiseSource = audioContext.createBufferSource();
+  const noiseFilter = audioContext.createBiquadFilter();
+  const noiseGain = audioContext.createGain();
+  noiseSource.buffer = createNoiseBuffer(audioContext, 7.3);
+  noiseSource.loop = true;
+  noiseFilter.type = "bandpass";
+  noiseFilter.frequency.value = 4200;
+  noiseFilter.Q.value = 0.45;
+  noiseGain.gain.value = rainBackgroundGain(amount) * 0.78;
+  noiseSource.connect(noiseFilter).connect(noiseGain).connect(variationGain);
+  noiseSource.start(now, Math.random() * noiseSource.buffer.duration);
 
-    if (audioContext.createStereoPanner && layer > 0) {
-      const panner = audioContext.createStereoPanner();
-      panner.pan.value = layer % 2 ? -0.32 : 0.32;
-      layerGain.connect(panner);
-      panner.connect(intensityGain);
-    } else {
-      layerGain.connect(intensityGain);
-    }
-
-    const available = source.loopEnd;
-    const offset = (Math.random() * available + layer * 11.37) % available;
-    source.start(now, offset);
-    sources.push(source);
-    layerGains.push(layerGain);
-  }
-
-  const variationEnd = now + 60 * 60;
-  let variationTime = now;
-  let previousGain = 0.9 + Math.random() * 0.12;
-  variationGain.gain.linearRampToValueAtTime(previousGain, now + 1.2);
-  variationTime = now + 1.2;
-  while (variationTime < variationEnd) {
-    variationTime += 4 + Math.random() * 9;
-    const variation = 0.08 + (1 - amount) * 0.2;
-    previousGain = 1 - variation + Math.random() * variation * 2;
-    variationGain.gain.linearRampToValueAtTime(previousGain, variationTime);
-  }
-
-  for (const source of sources) source.playbackRate.setValueAtTime(1, now);
+  const lowNoiseSource = audioContext.createBufferSource();
+  const lowNoiseFilter = audioContext.createBiquadFilter();
+  const lowNoiseGain = audioContext.createGain();
+  lowNoiseSource.buffer = createNoiseBuffer(audioContext, 9.1);
+  lowNoiseSource.loop = true;
+  lowNoiseFilter.type = "lowpass";
+  lowNoiseFilter.frequency.value = 900;
+  lowNoiseFilter.Q.value = 0.7;
+  lowNoiseGain.gain.value = rainBackgroundGain(amount) * 0.25;
+  lowNoiseSource.connect(lowNoiseFilter).connect(lowNoiseGain).connect(variationGain);
+  lowNoiseSource.start(now, Math.random() * lowNoiseSource.buffer.duration);
 
   continuousSession = {
     audioContext,
-    intensityGain,
+    masterGain,
     variationGain,
-    sources,
-    layerGains,
+    sources: [noiseSource, lowNoiseSource],
+    noiseFilter,
+    noiseGain,
+    lowNoiseGain,
     liveDropSources: new Set(),
     dropTimer: null,
+    modulationTimer: null,
     amount,
   };
   scheduleContinuousDrops(continuousSession);
+  scheduleContinuousModulation(continuousSession);
+}
+
+function scheduleContinuousModulation(session) {
+  if (continuousSession !== session) return;
+  const now = session.audioContext.currentTime;
+  const duration = 2 + Math.random() * 5;
+  const variation = 0.75 + Math.random() * 0.35;
+  const target = rainBackgroundGain(session.amount) * 0.78 * variation;
+  session.noiseGain.gain.cancelScheduledValues(now);
+  session.noiseGain.gain.setValueAtTime(session.noiseGain.gain.value, now);
+  session.noiseGain.gain.linearRampToValueAtTime(target, now + duration);
+  session.noiseFilter.frequency.cancelScheduledValues(now);
+  session.noiseFilter.frequency.setValueAtTime(session.noiseFilter.frequency.value, now);
+  session.noiseFilter.frequency.linearRampToValueAtTime(3000 + Math.random() * 3000, now + duration);
+  session.modulationTimer = setTimeout(() => scheduleContinuousModulation(session), duration * 1000);
 }
 
 function playContinuousDrop(session, size, startTime) {
@@ -495,17 +432,13 @@ function scheduleContinuousDrops(session) {
 
 function updateContinuousIntensity(amount) {
   if (!continuousSession) return;
-  const { audioContext, intensityGain, layerGains } = continuousSession;
+  const { audioContext, noiseGain, lowNoiseGain } = continuousSession;
   continuousSession.amount = amount;
   const now = audioContext.currentTime;
-  const levels = rainLayerLevels(amount, layerGains.length);
-  for (let index = 0; index < layerGains.length; index += 1) {
-    const gain = layerGains[index].gain;
-    gain.cancelScheduledValues(now);
-    gain.setTargetAtTime(levels[index], now, 0.12);
-  }
-  intensityGain.gain.cancelScheduledValues(now);
-  intensityGain.gain.setTargetAtTime(rainBackgroundGain(amount), now, 0.18);
+  noiseGain.gain.cancelScheduledValues(now);
+  noiseGain.gain.setTargetAtTime(rainBackgroundGain(amount) * 0.78, now, 0.18);
+  lowNoiseGain.gain.cancelScheduledValues(now);
+  lowNoiseGain.gain.setTargetAtTime(rainBackgroundGain(amount) * 0.25, now, 0.18);
 }
 
 async function stopContinuousPlayback() {
@@ -513,6 +446,7 @@ async function stopContinuousPlayback() {
   const session = continuousSession;
   continuousSession = null;
   if (session.dropTimer) clearTimeout(session.dropTimer);
+  if (session.modulationTimer) clearTimeout(session.modulationTimer);
   for (const source of session.sources) {
     try { source.stop(); } catch {}
   }
@@ -592,7 +526,7 @@ generateButton.addEventListener("click", async () => {
   duration.disabled = true;
   intensity.disabled = true;
   continuous.disabled = true;
-  status.textContent = continuous.checked ? "連続再生を準備中" : "実録音源を準備中";
+  status.textContent = continuous.checked ? "連続再生を準備中" : "雨音を準備中";
   status.classList.add("busy");
   try {
     if (continuous.checked) {

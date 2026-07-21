@@ -2,8 +2,6 @@ const SAMPLE_RATE = 44100;
 const MP3_BITRATE = 192;
 const MP3_BLOCK_SIZE = 1152;
 
-const TWO_PI = Math.PI * 2;
-
 const duration = document.querySelector("#duration");
 const intensity = document.querySelector("#intensity");
 const continuous = document.querySelector("#continuous");
@@ -122,8 +120,9 @@ function createDropRates(amount) {
   const value = Math.max(0, Math.min(1, Number(amount)));
   return {
     small: 0.3 + Math.pow(value, 1.8) * 28,
-    medium: 0.18 + Math.pow(value, 1.4) * 7,
-    large: 0.01 + Math.pow(value, 2.4) * 1.5,
+    medium: 0.55 + Math.pow(value, 1.4) * 8.5,
+    large: 0.025 + Math.pow(value, 2.4) * 1.7,
+    drip: 0.35 + Math.pow(value, 0.8) * 1.2,
   };
 }
 
@@ -154,34 +153,51 @@ function createIntensityCurve(totalFrames, amount, random) {
 function createDrop(random, size, intensityScale) {
   const isLarge = size === "large";
   const isMedium = size === "medium";
-  const duration = isLarge
+  const isDrip = size === "drip";
+  const surfaceValue = random();
+  const puddleThreshold = isLarge ? 0.35 : isMedium ? 0.52 : 0.9;
+  const hardThreshold = isLarge ? 0.18 : isMedium ? 0.28 : 0.55;
+  const surface = isDrip ? "puddle" : surfaceValue >= puddleThreshold
+    ? "puddle" : surfaceValue >= hardThreshold ? "hard" : "soft";
+  const surfaceDurationScale = surface === "puddle" ? 1.45 : surface === "hard" ? 0.85 : 1;
+  const duration = (isDrip ? 0.065 + random() * 0.07 : isLarge
     ? 0.035 + random() * 0.08
-    : isMedium ? 0.018 + random() * 0.055 : 0.006 + random() * 0.018;
-  const pan = random() * 1.8 - 0.9;
+    : isMedium ? 0.018 + random() * 0.055 : 0.006 + random() * 0.018) * surfaceDurationScale;
+  const panRange = isDrip ? 0.48 : 0.9;
+  const pan = (random() * 2 - 1) * panRange;
   const amplitude = (
-    isLarge ? 0.012 + random() * 0.03
-      : isMedium ? 0.007 + random() * 0.018 : 0.0015 + random() * 0.005
-  ) * intensityScale;
-  const baseFrequency = isLarge
-    ? 250 + Math.pow(random(), 2) * 850
-    : isMedium ? 480 + random() * 1500 : 1200 + random() * 2800;
+    isDrip ? 0.38 + random() * 0.24
+      : isLarge ? 0.055 + random() * 0.065
+      : isMedium ? 0.04 + random() * 0.055 : 0.0015 + random() * 0.005
+  ) * intensityScale * (surface === "puddle" && !isDrip ? 2.2 : 1);
+  const impactFrequency = surface === "soft"
+    ? 1800 + random() * 2500
+    : surface === "hard" ? 4500 + random() * 4500 : 1200 + random() * 1800;
+  const resonanceFrequency = surface === "soft"
+    ? 400 + random() * 700
+    : surface === "hard" ? 1200 + random() * 2400 : 300 + random() * 700;
+  const impactAlpha = 1 - Math.exp(-2 * Math.PI * impactFrequency / SAMPLE_RATE);
+  const resonanceAlpha = 1 - Math.exp(-2 * Math.PI * resonanceFrequency / SAMPLE_RATE);
   return {
     age: 0,
     durationFrames: Math.max(1, Math.round(duration * SAMPLE_RATE)),
-    decay: isLarge ? 8 + random() * 6 : isMedium ? 10 + random() * 8 : 12 + random() * 12,
+    decay: isDrip ? 5 + random() * 3 : isLarge ? 8 + random() * 6 : isMedium ? 10 + random() * 8 : 12 + random() * 12,
     leftGain: Math.sqrt((1 - pan) * 0.5),
     rightGain: Math.sqrt((1 + pan) * 0.5),
     amplitude,
-    phase1: random() * TWO_PI,
-    phase2: random() * TWO_PI,
-    phaseStep1: TWO_PI * baseFrequency / SAMPLE_RATE,
-    phaseStep2: TWO_PI * baseFrequency * (1.43 + random() * 0.38) / SAMPLE_RATE,
-    noiseState1: 0,
-    noiseState2: 0,
-    noiseSmoothing: isLarge ? 0.08 + random() * 0.08 : isMedium ? 0.13 + random() * 0.1 : 0.2 + random() * 0.18,
-    resonanceMix: isLarge
-      ? 0.035 + random() * 0.04
-      : isMedium ? 0.025 + random() * 0.025 : 0.005 + random() * 0.012,
+    impactFast: 0,
+    impactSlow: 0,
+    resonanceFast: 0,
+    resonanceSlow: 0,
+    impactAlpha,
+    impactSlowAlpha: impactAlpha * (surface === "hard" ? 0.42 : 0.58),
+    resonanceAlpha,
+    resonanceSlowAlpha: resonanceAlpha * (surface === "puddle" ? 0.34 : 0.52),
+    resonanceMix: surface === "puddle"
+      ? 0.24 + random() * 0.06
+      : surface === "hard" ? 0.1 + random() * 0.08 : 0.06 + random() * 0.06,
+    impactPresence: isDrip ? 1.35 : 1,
+    surface,
   };
 }
 
@@ -197,21 +213,23 @@ function renderDrops(activeDrops, random) {
     }
     const attack = Math.min(1, drop.age / Math.max(1, SAMPLE_RATE * 0.0006));
     const envelope = attack * Math.exp(-drop.decay * progress) * Math.pow(1 - progress, 1.5);
-    const whiteNoise = random() * 2 - 1;
-    drop.noiseState1 += (whiteNoise - drop.noiseState1) * drop.noiseSmoothing;
-    drop.noiseState2 += (drop.noiseState1 - drop.noiseState2) * drop.noiseSmoothing * 0.65;
-    const texturedNoise = drop.noiseState1 * 0.72 + (drop.noiseState1 - drop.noiseState2) * 0.55;
-    const resonance = Math.sin(drop.phase1) * 0.7 + Math.sin(drop.phase2) * 0.3;
-    const resonanceEnvelope = Math.exp(-18 * progress);
+    const whiteNoise = (random() * 2 - 1) * (0.55 + random() * 0.45);
+    drop.impactFast += (whiteNoise - drop.impactFast) * drop.impactAlpha;
+    drop.impactSlow += (whiteNoise - drop.impactSlow) * drop.impactSlowAlpha;
+    drop.resonanceFast += (whiteNoise - drop.resonanceFast) * drop.resonanceAlpha;
+    drop.resonanceSlow += (whiteNoise - drop.resonanceSlow) * drop.resonanceSlowAlpha;
+    const impact = drop.impactFast - drop.impactSlow;
+    const resonance = drop.resonanceFast - drop.resonanceSlow;
+    const resonanceEnvelope = Math.exp(-(drop.surface === "puddle" ? 7 : 13) * progress);
+    const landingBody = drop.surface === "puddle"
+      ? drop.resonanceFast * 3.8 + resonance * 1.6
+      : resonance;
     const sample = (
-      texturedNoise * (1 - drop.resonanceMix)
-      + resonance * drop.resonanceMix * resonanceEnvelope
+      impact * (1 - drop.resonanceMix) * drop.impactPresence
+      + landingBody * drop.resonanceMix * resonanceEnvelope
     ) * envelope * drop.amplitude;
     left += sample * drop.leftGain;
     right += sample * drop.rightGain;
-    const pitchDecay = 1 - progress * 0.025;
-    drop.phase1 += drop.phaseStep1 * pitchDecay;
-    drop.phase2 += drop.phaseStep2 * pitchDecay;
     drop.age += 1;
   }
   return [left, right];
@@ -266,6 +284,7 @@ async function generateMp3(seconds, amount, onProgress) {
   let nextSmallDrop = exponentialInterval(random, dropRates.small);
   let nextMediumDrop = exponentialInterval(random, dropRates.medium);
   let nextLargeDrop = exponentialInterval(random, dropRates.large);
+  let nextDrip = exponentialInterval(random, dropRates.drip);
 
   for (let block = 0; block < totalBlocks; block += 1) {
     const startFrame = block * MP3_BLOCK_SIZE;
@@ -289,6 +308,10 @@ async function generateMp3(seconds, amount, onProgress) {
       while (frame >= nextLargeDrop) {
         activeDrops.push(createDrop(random, "large", 0.85 + amount * 0.35));
         nextLargeDrop += exponentialInterval(random, dropRates.large * currentIntensity);
+      }
+      while (frame >= nextDrip) {
+        activeDrops.push(createDrop(random, "drip", 1));
+        nextDrip += exponentialInterval(random, dropRates.drip * currentIntensity);
       }
       const [dropLeft, dropRight] = renderDrops(activeDrops, random);
       const backgroundGain = baseBackgroundGain * currentIntensity
@@ -419,7 +442,7 @@ function scheduleContinuousDrops(session) {
   const intervalSeconds = 0.25;
   const rates = createDropRates(session.amount);
   const now = session.audioContext.currentTime;
-  for (const size of ["small", "medium", "large"]) {
+  for (const size of ["small", "medium", "large", "drip"]) {
     const expected = rates[size] * intervalSeconds;
     const guaranteed = Math.floor(expected);
     const count = guaranteed + (Math.random() < expected - guaranteed ? 1 : 0);

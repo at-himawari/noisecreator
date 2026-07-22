@@ -1,6 +1,10 @@
 const SAMPLE_RATE = 44100;
 const MP3_BITRATE = 192;
 const MP3_BLOCK_SIZE = 1152;
+const RAIN_BED_FREQUENCIES = [90, 1100, 650, 4200, 3800, 10500];
+const RAIN_BED_ALPHAS = RAIN_BED_FREQUENCIES.map(
+  (frequency) => 1 - Math.exp(-2 * Math.PI * frequency / SAMPLE_RATE),
+);
 
 const duration = document.querySelector("#duration");
 const intensity = document.querySelector("#intensity");
@@ -15,6 +19,95 @@ const player = document.querySelector("#player");
 const download = document.querySelector("#download");
 const blackoutTrigger = document.querySelector("#blackout-trigger");
 const blackoutScreen = document.querySelector("#blackout-screen");
+const languageButtons = document.querySelectorAll("[data-locale]");
+
+const translations = {
+  ja: {
+    pageTitle: "Rain Studio — 雨音ジェネレーター",
+    description: "長さと雨量を選んで自然な雨音を生成・再生できます。",
+    lead: "集中したい時間に、眠りにつく前に。<br>あなただけの雨を、その場でつくります。",
+    settingsTitle: "雨の設定", duration: "長さ", intensity: "雨量", fiveSeconds: "5秒", tenMinutes: "10分",
+    lightRain: "小雨", heavyRain: "強い雨", continuousMode: "連続モード",
+    continuousDescription: "停止するまで雨音を再生し続けます", generate: "雨音を生成する",
+    startContinuous: "連続再生を開始", stop: "停止する", blackout: "画面を消灯する",
+    exitBlackout: "画面の消灯を解除する", generatedRain: "生成した雨音", saveMp3: "MP3を保存",
+    ready: "準備完了", seconds: "{value}秒", minutes: "{minutes}分{seconds}",
+    intensityQuiet: "静かな小雨", intensityGentle: "穏やか", intensitySteady: "しっかりした雨",
+    encoderMissing: "MP3エンコーダーを読み込めませんでした", preparingRain: "雨音を準備中",
+    generating: "MP3を生成中 {progress}%", durationChanged: "長さを変更しました。再生成してください",
+    continuousPlayingAmount: "連続再生中・雨量 {amount}%", changingIntensity: "雨量を変更中…",
+    regenerating: "新しい雨量で再生成します", stopping: "停止中…", stopped: "停止しました",
+    preparingContinuous: "連続再生を準備中", continuousPlaying: "連続再生中", complete: "生成完了",
+    genericError: "エラーが発生しました",
+  },
+  en: {
+    pageTitle: "Rain Studio — Rain Sound Generator",
+    description: "Choose a duration and intensity to generate and play natural rain sounds.",
+    lead: "For focused hours and quiet nights.<br>Create your own rain, right in the browser.",
+    settingsTitle: "Rain settings", duration: "Duration", intensity: "Intensity", fiveSeconds: "5 sec", tenMinutes: "10 min",
+    lightRain: "Light rain", heavyRain: "Heavy rain", continuousMode: "Continuous mode",
+    continuousDescription: "Keep playing until you stop it", generate: "Generate rain sound",
+    startContinuous: "Start continuous playback", stop: "Stop", blackout: "Blackout screen",
+    exitBlackout: "Exit blackout mode", generatedRain: "Generated rain", saveMp3: "Save MP3",
+    ready: "Ready", seconds: "{value} sec", minutes: "{minutes} min {seconds}",
+    intensityQuiet: "Sparse drizzle", intensityGentle: "Gentle rain", intensitySteady: "Steady rain",
+    encoderMissing: "The MP3 encoder could not be loaded.", preparingRain: "Preparing rain sound",
+    generating: "Generating MP3 {progress}%", durationChanged: "Duration changed. Generate again to apply it.",
+    continuousPlayingAmount: "Playing continuously · Intensity {amount}%", changingIntensity: "Changing intensity…",
+    regenerating: "Regenerating with the new intensity", stopping: "Stopping…", stopped: "Stopped",
+    preparingContinuous: "Preparing continuous playback", continuousPlaying: "Playing continuously", complete: "Generation complete",
+    genericError: "An error occurred.",
+  },
+};
+
+let locale = (() => {
+  try {
+    const saved = localStorage.getItem("rain-studio-locale");
+    if (saved === "ja" || saved === "en") return saved;
+  } catch {}
+  return navigator.language?.toLowerCase().startsWith("ja") ? "ja" : "en";
+})();
+let statusKey = "ready";
+let statusParameters = {};
+
+function t(key, parameters = {}) {
+  const template = translations[locale][key] ?? translations.ja[key] ?? key;
+  return template.replace(/\{(\w+)\}/g, (_match, name) => parameters[name] ?? "");
+}
+
+function setStatus(key, parameters = {}) {
+  statusKey = key;
+  statusParameters = parameters;
+  status.textContent = t(key, parameters);
+}
+
+function applyLocale(nextLocale) {
+  locale = nextLocale === "en" ? "en" : "ja";
+  document.documentElement.lang = locale;
+  document.title = t("pageTitle");
+  document.querySelector('meta[name="description"]')?.setAttribute("content", t("description"));
+  document.querySelector('meta[property="og:locale"]')?.setAttribute("content", locale === "ja" ? "ja_JP" : "en_US");
+  document.querySelector('meta[property="og:title"]')?.setAttribute("content", t("pageTitle"));
+  document.querySelector('meta[property="og:description"]')?.setAttribute("content", t("description"));
+  document.querySelector('meta[name="twitter:title"]')?.setAttribute("content", t("pageTitle"));
+  document.querySelector('meta[name="twitter:description"]')?.setAttribute("content", t("description"));
+  document.querySelectorAll("[data-i18n]").forEach((element) => {
+    element.textContent = t(element.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-html]").forEach((element) => {
+    element.innerHTML = t(element.dataset.i18nHtml);
+  });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach((element) => {
+    element.setAttribute("aria-label", t(element.dataset.i18nAriaLabel));
+  });
+  languageButtons.forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.locale === locale));
+  });
+  try { localStorage.setItem("rain-studio-locale", locale); } catch {}
+  setStatus(statusKey, statusParameters);
+  updateControls();
+  updateMode();
+}
 
 let currentAudioUrl = null;
 let continuousSession = null;
@@ -111,9 +204,14 @@ function exponentialInterval(random, ratePerSecond) {
   return -Math.log(Math.max(1e-9, 1 - random())) * SAMPLE_RATE / ratePerSecond;
 }
 
-function rainBackgroundGain(amount) {
+function rainBedGains(amount) {
   const value = Math.max(0, Math.min(1, Number(amount)));
-  return 0.015 + Math.pow(value, 1.8) * 0.72;
+  const density = Math.pow(value, 1.7);
+  return {
+    distance: 0.006 + density * 0.04,
+    body: 0.008 + density * 0.11,
+    mist: 0.002 + density * 0.05,
+  };
 }
 
 function createDropRates(amount) {
@@ -131,7 +229,7 @@ function createIntensityCurve(totalFrames, amount, random) {
   let frame = 0;
   while (frame < totalFrames) {
     frame += Math.round((4 + random() * 9) * SAMPLE_RATE);
-    const variation = 0.08 + (1 - amount) * 0.2;
+    const variation = 0.04 + (1 - amount) * 0.08;
     points.push({
       frame: Math.min(frame, totalFrames),
       value: 1 - variation + random() * variation * 2,
@@ -236,42 +334,40 @@ function renderDrops(activeDrops, random) {
 }
 
 function createRainBedState() {
-  return {
-    commonFast: 0,
-    commonSlow: 0,
-    leftFast: 0,
-    leftSlow: 0,
-    rightFast: 0,
-    rightSlow: 0,
-    low: 0,
-  };
+  const channel = () => ({ pinkSlow: 0, pinkMid: 0, filters: new Array(6).fill(0) });
+  return { left: channel(), right: channel() };
 }
 
-function renderRainBed(state, random) {
+function renderRainBedChannel(state, white, gains) {
+  state.pinkSlow = state.pinkSlow * 0.985 + white * 0.07;
+  state.pinkMid = state.pinkMid * 0.88 + white * 0.22;
+  const pink = white * 0.38 + state.pinkMid * 0.34 + state.pinkSlow * 0.28;
+  for (let index = 0; index < RAIN_BED_ALPHAS.length; index += 1) {
+    state.filters[index] += (pink - state.filters[index]) * RAIN_BED_ALPHAS[index];
+  }
+  const distance = state.filters[1] - state.filters[0];
+  const body = state.filters[3] - state.filters[2];
+  const mist = state.filters[5] - state.filters[4];
+  return distance * gains.distance + body * gains.body + mist * gains.mist;
+}
+
+function renderRainBed(state, random, amount) {
+  const gains = rainBedGains(amount);
   const common = random() * 2 - 1;
-  const independentLeft = random() * 2 - 1;
-  const independentRight = random() * 2 - 1;
-  state.commonFast += (common - state.commonFast) * 0.24;
-  state.commonSlow += (common - state.commonSlow) * 0.018;
-  state.leftFast += (independentLeft - state.leftFast) * 0.2;
-  state.leftSlow += (independentLeft - state.leftSlow) * 0.014;
-  state.rightFast += (independentRight - state.rightFast) * 0.2;
-  state.rightSlow += (independentRight - state.rightSlow) * 0.014;
-  state.low += (common - state.low) * 0.004;
-  const commonBand = state.commonFast - state.commonSlow;
+  const leftNoise = common * 0.72 + (random() * 2 - 1) * 0.28;
+  const rightNoise = common * 0.72 + (random() * 2 - 1) * 0.28;
   return [
-    commonBand * 0.72 + (state.leftFast - state.leftSlow) * 0.28 + state.low * 0.22,
-    commonBand * 0.72 + (state.rightFast - state.rightSlow) * 0.28 + state.low * 0.22,
+    renderRainBedChannel(state.left, leftNoise, gains),
+    renderRainBedChannel(state.right, rightNoise, gains),
   ];
 }
 
 async function generateMp3(seconds, amount, onProgress) {
   if (!globalThis.lamejs?.Mp3Encoder) {
-    throw new Error("MP3エンコーダーを読み込めませんでした");
+    throw new Error(t("encoderMissing"));
   }
 
-  onProgress(1, "雨音を準備中");
-  const baseBackgroundGain = rainBackgroundGain(amount);
+  onProgress(1, t("preparingRain"));
   const encoder = new lamejs.Mp3Encoder(2, SAMPLE_RATE, MP3_BITRATE);
   const totalFrames = Math.round(seconds * SAMPLE_RATE);
   const totalBlocks = Math.ceil(totalFrames / MP3_BLOCK_SIZE);
@@ -295,7 +391,7 @@ async function generateMp3(seconds, amount, onProgress) {
     for (let local = 0; local < frameCount; local += 1) {
       const frame = startFrame + local;
       const currentIntensity = intensityAt(frame);
-      const [bedLeft, bedRight] = renderRainBed(rainBedState, random);
+      const [bedLeft, bedRight] = renderRainBed(rainBedState, random, amount);
 
       while (frame >= nextSmallDrop) {
         activeDrops.push(createDrop(random, "small", 0.8 + amount * 0.35));
@@ -314,7 +410,7 @@ async function generateMp3(seconds, amount, onProgress) {
         nextDrip += exponentialInterval(random, dropRates.drip * currentIntensity);
       }
       const [dropLeft, dropRight] = renderDrops(activeDrops, random);
-      const backgroundGain = baseBackgroundGain * currentIntensity
+      const backgroundGain = currentIntensity
         * (0.98 + Math.sin(frame / SAMPLE_RATE * 0.071) * 0.012);
       leftPcm[local] = toPcm16(bedLeft * backgroundGain + dropLeft);
       rightPcm[local] = toPcm16(bedRight * backgroundGain + dropRight);
@@ -325,7 +421,7 @@ async function generateMp3(seconds, amount, onProgress) {
 
     if (block % 32 === 0 || block === totalBlocks - 1) {
       const progress = Math.max(2, Math.round(((block + 1) / totalBlocks) * 100));
-      onProgress(progress, `MP3を生成中 ${progress}%`);
+      onProgress(progress, t("generating", { progress }));
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
@@ -335,19 +431,52 @@ async function generateMp3(seconds, amount, onProgress) {
   return new Blob(mp3Chunks, { type: "audio/mpeg" });
 }
 
-function createNoiseBuffer(audioContext, seconds = 7) {
+function createColoredNoiseBuffer(audioContext, seconds = 8) {
   const length = Math.floor(audioContext.sampleRate * seconds);
   const buffer = audioContext.createBuffer(2, length, audioContext.sampleRate);
   for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
     const data = buffer.getChannelData(channel);
-    let previous = 0;
+    let b0 = 0;
+    let b1 = 0;
+    let b2 = 0;
+    let b3 = 0;
+    let b4 = 0;
+    let b5 = 0;
+    let b6 = 0;
     for (let index = 0; index < length; index += 1) {
       const white = Math.random() * 2 - 1;
-      previous = previous * 0.75 + white * 0.25;
-      data[index] = previous;
+      b0 = 0.99886 * b0 + white * 0.0555179;
+      b1 = 0.99332 * b1 + white * 0.0750759;
+      b2 = 0.969 * b2 + white * 0.153852;
+      b3 = 0.8665 * b3 + white * 0.3104856;
+      b4 = 0.55 * b4 + white * 0.5329522;
+      b5 = -0.7616 * b5 - white * 0.016898;
+      data[index] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
+      b6 = white * 0.115926;
     }
   }
   return buffer;
+}
+
+function createContinuousRainLayer(audioContext, destination, settings) {
+  const source = audioContext.createBufferSource();
+  const highpass = audioContext.createBiquadFilter();
+  const lowpass = audioContext.createBiquadFilter();
+  const gain = audioContext.createGain();
+  const panner = audioContext.createStereoPanner();
+  source.buffer = createColoredNoiseBuffer(audioContext, settings.duration);
+  source.loop = true;
+  highpass.type = "highpass";
+  highpass.frequency.value = settings.lowFrequency;
+  highpass.Q.value = 0.45;
+  lowpass.type = "lowpass";
+  lowpass.frequency.value = settings.highFrequency;
+  lowpass.Q.value = 0.5;
+  gain.gain.value = settings.gainValue;
+  panner.pan.value = settings.pan;
+  source.connect(highpass).connect(lowpass).connect(gain).connect(panner).connect(destination);
+  source.start(audioContext.currentTime, Math.random() * source.buffer.duration);
+  return { source, highpass, lowpass, gain, panner };
 }
 
 async function startContinuousPlayback(amount) {
@@ -362,38 +491,25 @@ async function startContinuousPlayback(amount) {
   variationGain.gain.setValueAtTime(1, now);
   variationGain.connect(masterGain).connect(audioContext.destination);
 
-  const noiseSource = audioContext.createBufferSource();
-  const noiseFilter = audioContext.createBiquadFilter();
-  const noiseGain = audioContext.createGain();
-  noiseSource.buffer = createNoiseBuffer(audioContext, 7.3);
-  noiseSource.loop = true;
-  noiseFilter.type = "bandpass";
-  noiseFilter.frequency.value = 4200;
-  noiseFilter.Q.value = 0.45;
-  noiseGain.gain.value = rainBackgroundGain(amount) * 0.78;
-  noiseSource.connect(noiseFilter).connect(noiseGain).connect(variationGain);
-  noiseSource.start(now, Math.random() * noiseSource.buffer.duration);
-
-  const lowNoiseSource = audioContext.createBufferSource();
-  const lowNoiseFilter = audioContext.createBiquadFilter();
-  const lowNoiseGain = audioContext.createGain();
-  lowNoiseSource.buffer = createNoiseBuffer(audioContext, 9.1);
-  lowNoiseSource.loop = true;
-  lowNoiseFilter.type = "lowpass";
-  lowNoiseFilter.frequency.value = 900;
-  lowNoiseFilter.Q.value = 0.7;
-  lowNoiseGain.gain.value = rainBackgroundGain(amount) * 0.25;
-  lowNoiseSource.connect(lowNoiseFilter).connect(lowNoiseGain).connect(variationGain);
-  lowNoiseSource.start(now, Math.random() * lowNoiseSource.buffer.duration);
+  const gains = rainBedGains(amount);
+  const layers = [
+    createContinuousRainLayer(audioContext, variationGain, {
+      lowFrequency: 90, highFrequency: 1100, gainValue: gains.distance, pan: -0.08, duration: 8.3,
+    }),
+    createContinuousRainLayer(audioContext, variationGain, {
+      lowFrequency: 650, highFrequency: 4200, gainValue: gains.body, pan: 0.06, duration: 9.7,
+    }),
+    createContinuousRainLayer(audioContext, variationGain, {
+      lowFrequency: 3800, highFrequency: 10500, gainValue: gains.mist, pan: 0, duration: 11.1,
+    }),
+  ];
 
   continuousSession = {
     audioContext,
     masterGain,
     variationGain,
-    sources: [noiseSource, lowNoiseSource],
-    noiseFilter,
-    noiseGain,
-    lowNoiseGain,
+    sources: layers.map((layer) => layer.source),
+    layers,
     liveDropSources: new Set(),
     dropTimer: null,
     modulationTimer: null,
@@ -406,15 +522,25 @@ async function startContinuousPlayback(amount) {
 function scheduleContinuousModulation(session) {
   if (continuousSession !== session) return;
   const now = session.audioContext.currentTime;
-  const duration = 2 + Math.random() * 5;
-  const variation = 0.75 + Math.random() * 0.35;
-  const target = rainBackgroundGain(session.amount) * 0.78 * variation;
-  session.noiseGain.gain.cancelScheduledValues(now);
-  session.noiseGain.gain.setValueAtTime(session.noiseGain.gain.value, now);
-  session.noiseGain.gain.linearRampToValueAtTime(target, now + duration);
-  session.noiseFilter.frequency.cancelScheduledValues(now);
-  session.noiseFilter.frequency.setValueAtTime(session.noiseFilter.frequency.value, now);
-  session.noiseFilter.frequency.linearRampToValueAtTime(3000 + Math.random() * 3000, now + duration);
+  const duration = 1.5 + Math.random() * 4.5;
+  const gains = rainBedGains(session.amount);
+  const settings = [
+    { base: gains.distance, variation: 0.18 },
+    { base: gains.body, variation: 0.12 },
+    { base: gains.mist, variation: 0.22 },
+  ];
+  for (let index = 0; index < session.layers.length; index += 1) {
+    const parameter = session.layers[index].gain.gain;
+    const setting = settings[index];
+    const variation = 1 - setting.variation + Math.random() * setting.variation * 2;
+    parameter.cancelScheduledValues(now);
+    parameter.setValueAtTime(Math.max(0.0001, parameter.value), now);
+    parameter.linearRampToValueAtTime(Math.max(0.0001, setting.base * variation), now + duration);
+  }
+  const mistCutoff = session.layers[2].lowpass.frequency;
+  mistCutoff.cancelScheduledValues(now);
+  mistCutoff.setValueAtTime(mistCutoff.value, now);
+  mistCutoff.linearRampToValueAtTime(8000 + Math.random() * 4000, now + duration);
   session.modulationTimer = setTimeout(() => scheduleContinuousModulation(session), duration * 1000);
 }
 
@@ -455,13 +581,16 @@ function scheduleContinuousDrops(session) {
 
 function updateContinuousIntensity(amount) {
   if (!continuousSession) return;
-  const { audioContext, noiseGain, lowNoiseGain } = continuousSession;
+  const { audioContext, layers } = continuousSession;
   continuousSession.amount = amount;
   const now = audioContext.currentTime;
-  noiseGain.gain.cancelScheduledValues(now);
-  noiseGain.gain.setTargetAtTime(rainBackgroundGain(amount) * 0.78, now, 0.18);
-  lowNoiseGain.gain.cancelScheduledValues(now);
-  lowNoiseGain.gain.setTargetAtTime(rainBackgroundGain(amount) * 0.25, now, 0.18);
+  const targetGains = rainBedGains(amount);
+  const gains = [targetGains.distance, targetGains.body, targetGains.mist];
+  for (let index = 0; index < layers.length; index += 1) {
+    const parameter = layers[index].gain.gain;
+    parameter.cancelScheduledValues(now);
+    parameter.setTargetAtTime(gains[index], now, 0.24);
+  }
 }
 
 async function stopContinuousPlayback() {
@@ -487,11 +616,16 @@ function formatDuration(seconds) {
 
 function updateControls() {
   const seconds = Number(duration.value);
-  durationValue.value = seconds < 60 ? `${seconds}秒` : `${Math.floor(seconds / 60)}分${seconds % 60 ? `${seconds % 60}秒` : ""}`;
+  durationValue.value = seconds < 60
+    ? t("seconds", { value: seconds })
+    : t("minutes", {
+      minutes: Math.floor(seconds / 60),
+      seconds: seconds % 60 ? t("seconds", { value: seconds % 60 }) : "",
+    }).trim();
   buttonTime.textContent = continuousSession ? "LIVE" : continuous.checked ? "∞" : formatDuration(seconds);
 
   const amount = Number(intensity.value);
-  const label = amount < 0.34 ? "静かな小雨" : amount < 0.72 ? "穏やか" : "しっかりした雨";
+  const label = amount < 0.34 ? t("intensityQuiet") : amount < 0.72 ? t("intensityGentle") : t("intensitySteady");
   intensityValue.value = `${label} ${Math.round(amount * 100)}%`;
 }
 
@@ -501,31 +635,35 @@ function updateMode() {
     regenerationTimer = null;
   }
   duration.disabled = continuous.checked;
-  document.querySelector(".button-text").textContent = continuous.checked ? "連続再生を開始" : "雨音を生成する";
+  document.querySelector(".button-text").textContent = continuousSession
+    ? t("stop") : continuous.checked ? t("startContinuous") : t("generate");
   buttonTime.textContent = continuous.checked ? "∞" : formatDuration(Number(duration.value));
 }
 
 duration.addEventListener("input", () => {
   updateControls();
-  if (currentAudioUrl && !continuousSession) status.textContent = "長さを変更しました。再生成してください";
+  if (currentAudioUrl && !continuousSession) setStatus("durationChanged");
 });
 intensity.addEventListener("input", () => {
   updateControls();
   const amount = Number(intensity.value);
   if (continuousSession) {
     updateContinuousIntensity(amount);
-    status.textContent = `連続再生中・雨量 ${Math.round(amount * 100)}%`;
+    setStatus("continuousPlayingAmount", { amount: Math.round(amount * 100) });
   } else if (currentAudioUrl) {
     if (regenerationTimer) clearTimeout(regenerationTimer);
-    status.textContent = "雨量を変更中…";
+    setStatus("changingIntensity");
     regenerationTimer = setTimeout(() => {
       regenerationTimer = null;
-      status.textContent = "新しい雨量で再生成します";
+      setStatus("regenerating");
       generateButton.click();
     }, 450);
   }
 });
 continuous.addEventListener("change", updateMode);
+languageButtons.forEach((button) => {
+  button.addEventListener("click", () => applyLocale(button.dataset.locale));
+});
 
 generateButton.addEventListener("click", async () => {
   if (regenerationTimer) {
@@ -534,14 +672,14 @@ generateButton.addEventListener("click", async () => {
   }
   if (continuousSession) {
     generateButton.disabled = true;
-    status.textContent = "停止中…";
+    setStatus("stopping");
     await stopContinuousPlayback();
     trackEvent("continuous_playback_stop");
     generateButton.disabled = false;
     continuous.disabled = false;
     intensity.disabled = false;
-    document.querySelector(".button-text").textContent = "連続再生を開始";
-    status.textContent = "停止しました";
+    document.querySelector(".button-text").textContent = t("startContinuous");
+    setStatus("stopped");
     return;
   }
 
@@ -549,7 +687,7 @@ generateButton.addEventListener("click", async () => {
   duration.disabled = true;
   intensity.disabled = true;
   continuous.disabled = true;
-  status.textContent = continuous.checked ? "連続再生を準備中" : "雨音を準備中";
+  setStatus(continuous.checked ? "preparingContinuous" : "preparingRain");
   status.classList.add("busy");
   try {
     if (continuous.checked) {
@@ -558,8 +696,8 @@ generateButton.addEventListener("click", async () => {
         intensity: Number(intensity.value),
       });
       player.pause();
-      status.textContent = "連続再生中";
-      document.querySelector(".button-text").textContent = "停止する";
+      setStatus("continuousPlaying");
+      document.querySelector(".button-text").textContent = t("stop");
       buttonTime.textContent = "LIVE";
       generateButton.disabled = false;
       intensity.disabled = false;
@@ -567,8 +705,8 @@ generateButton.addEventListener("click", async () => {
     }
 
     const seconds = Number(duration.value);
-    const audio = await generateMp3(seconds, Number(intensity.value), (_progress, label) => {
-      status.textContent = label;
+    const audio = await generateMp3(seconds, Number(intensity.value), (progress) => {
+      setStatus(progress <= 1 ? "preparingRain" : "generating", { progress });
     });
     if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
     currentAudioUrl = URL.createObjectURL(audio);
@@ -580,11 +718,17 @@ generateButton.addEventListener("click", async () => {
       duration_seconds: seconds,
       intensity: Number(intensity.value),
     });
-    status.textContent = "生成完了";
+    setStatus("complete");
     playerPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
     await player.play().catch(() => {});
   } catch (error) {
-    status.textContent = error instanceof Error ? error.message : "エラーが発生しました";
+    if (error instanceof Error) {
+      statusKey = "genericError";
+      statusParameters = {};
+      status.textContent = error.message;
+    } else {
+      setStatus("genericError");
+    }
   } finally {
     if (!continuousSession) {
       generateButton.disabled = false;
@@ -596,5 +740,4 @@ generateButton.addEventListener("click", async () => {
   }
 });
 
-updateControls();
-updateMode();
+applyLocale(locale);
